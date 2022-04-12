@@ -1,6 +1,7 @@
 import torch.nn as nn
 import torch
 
+
 class ConvDecoder(nn.Module):
     """
     A simple Convolutional Decoder Model
