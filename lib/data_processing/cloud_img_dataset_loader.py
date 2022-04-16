@@ -1,7 +1,6 @@
 import pandas as pd
 import requests
 from typing import Optional
-from pathlib import Path
 import os
 from tqdm import tqdm
 from pandarallel import pandarallel
