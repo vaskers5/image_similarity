@@ -1,5 +1,6 @@
 import numpy as np
-from datasketch import MinHash, MinHashLSHForest
+from typing import Tuple
+from datasketch import MinHash, MinHashLSH, MinHashLSHForest
 from tqdm import tqdm
 import torch
 import torch.nn as nn
@@ -12,16 +13,18 @@ class HashBuilderFromModel:
                  device: str,
                  dataset: Dataset,
                  num_permutations: int,
-                 num_prefix_trees: int):
+                 num_prefix_trees: int,
+                 lsh_threshold: float):
         model.to(device)
         self.model = model
         self.device = device
         self.dataset = dataset
         self.num_permutations = num_permutations
         self.tree = MinHashLSHForest(num_perm=num_permutations, l=num_prefix_trees)
+        self.hash_lsh = MinHashLSH(threshold=lsh_threshold, num_perm=num_permutations)
 
     def build_forest(self,
-                     full_loader: DataLoader) -> MinHashLSHForest:
+                     full_loader: DataLoader) -> Tuple[MinHashLSHForest, MinHashLSH]:
 
         self.model.eval()
         iter_num = 0
@@ -32,8 +35,9 @@ class HashBuilderFromModel:
                 for image in model_output:
                     image_hash = self.get_min_embeding(image.detach().numpy(), self.num_permutations)
                     self.tree.add(self.dataset.get_id(iter_num), image_hash)
+                    self.hash_lsh.insert(self.dataset.get_id(iter_num), image_hash)
                     iter_num += 1
-        return self.tree
+        return self.tree, self.hash_lsh
 
     @staticmethod
     def get_min_embeding(embeging: np.ndarray, permutations: int) -> np.ndarray:
