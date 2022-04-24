@@ -33,7 +33,8 @@ class HashBuilderFromModel:
                 train_img = train_img.to(self.device)
                 model_output = self.model(train_img).cpu()
                 for image in model_output:
-                    image_hash = self.get_min_embeding(image.detach().numpy(), self.num_permutations)
+                    image = image.squeeze(0).detach().ceil().int().numpy()
+                    image_hash = self.get_min_embeding(image, self.num_permutations)
                     self.tree.add(self.dataset.get_id(iter_num), image_hash)
                     self.hash_lsh.insert(self.dataset.get_id(iter_num), image_hash)
                     iter_num += 1
