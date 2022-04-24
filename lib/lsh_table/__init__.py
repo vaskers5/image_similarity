@@ -1,1 +1,2 @@
 from .lsh_table_from_embedings import HashBuilderFromModel
+from .forest_inferer import ForestInferer
