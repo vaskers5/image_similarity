@@ -7,8 +7,7 @@ import numpy as np
 from PIL import Image
 from sklearn.neighbors import NearestNeighbors
 from typing import List
-from tqdm.notebook import tqdm_notebook
-
+from tqdm import tqdm
 
 
 def train_step(encoder: nn.Module,
@@ -32,7 +31,7 @@ def train_step(encoder: nn.Module,
     encoder.train()
     decoder.train()
 
-    for batch_idx, (train_img, target_img) in tqdm_notebook(enumerate(train_loader)):
+    for (train_img, target_img) in tqdm(train_loader):
         train_img = train_img.to(device)
         target_img = target_img.to(device)
         optimizer.zero_grad()
@@ -65,7 +64,7 @@ def val_step(encoder: nn.Module,
     decoder.eval()
     
     with torch.no_grad():
-        for batch_idx, (train_img, target_img) in tqdm_notebook(enumerate(val_loader)):
+        for (train_img, target_img) in tqdm(val_loader):
             train_img = train_img.to(device)
             target_img = target_img.to(device)
             enc_output = encoder(train_img)
@@ -90,7 +89,7 @@ def create_embedding(encoder: nn.Module, full_loader: DataLoader, embedding_dim:
     embedding = torch.randn(embedding_dim)
     
     with torch.no_grad():
-        for batch_idx, (train_img, target_img) in enumerate(full_loader):
+        for (train_img, target_img) in tqdm(full_loader):
             train_img = train_img.to(device)
             enc_output = encoder(train_img).cpu()
             embedding = torch.cat((embedding, enc_output), 0)
