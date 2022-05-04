@@ -16,6 +16,7 @@ class HashBuilderFromModel:
                  num_permutations: int,
                  num_prefix_trees: int,
                  lsh_threshold: float):
+        model.eval()
         model.to(device)
         self.model = model
         self.device = device
@@ -28,12 +29,11 @@ class HashBuilderFromModel:
     def build_forest(self,
                      full_loader: DataLoader) -> Tuple[MinHashLSHForest, MinHashLSH]:
 
-        self.model.eval()
         iter_num = 0
         with torch.no_grad():
-            for (train_img, target_img) in tqdm(full_loader):
-                train_img = train_img.to(self.device)
-                model_output = self.model(train_img).cpu()
+            for batch in tqdm(full_loader):
+                batch = batch[0].to(self.device)
+                model_output = self.model(batch).cpu()
                 self.batch_query(iter_num, model_output)
                 iter_num += len(model_output)
         return self.tree, self.hash_lsh, self.hash_gen
@@ -62,4 +62,7 @@ class HashBuilderFromModel:
 
         with Pool() as pool:
             pool_data = [(iter_num + idx, feature) for idx, feature in enumerate(batch_features)]
-            pool.starmap(self.query_img_simple, pool_data)
+            pool.starmap(self.query_img_weighted, pool_data)
+            # map(self.query_img_simple,
+            #     [iter_num + idx for idx in range(len(batch_features))],
+            #     batch_features)
