@@ -1,7 +1,7 @@
 import numpy as np
 from typing import Tuple
 from datasketch import MinHash, MinHashLSH, MinHashLSHForest, WeightedMinHashGenerator
-from multiprocessing import Pool
+from multiprocessing.pool import ThreadPool as Pool
 from tqdm import tqdm
 import torch
 import torch.nn as nn
@@ -42,16 +42,16 @@ class HashBuilderFromModel:
                            iter_num: int,
                            feature: np.ndarray) -> None:
         image_hash = self.hash_gen.minhash(feature)
-        self.tree.add(self.dataset.get_id(iter_num), image_hash)
-        self.hash_lsh.insert(self.dataset.get_id(iter_num), image_hash)
+        id_img = self.dataset.get_id(iter_num)
+        return {'key': id_img, 'minhash': image_hash}
 
     def query_img_simple(self,
                          iter_num: int,
                          feature: np.ndarray) -> None:
         image_hash = MinHash(num_perm=self.num_permutations)
         image_hash.update(feature)
-        self.tree.add(self.dataset.get_id(iter_num), image_hash)
-        self.hash_lsh.insert(self.dataset.get_id(iter_num), image_hash)
+        id_img = self.dataset.get_id(iter_num)
+        return {'key': id_img, 'minhash': image_hash}
 
     def batch_query(self, iter_num: int, features: torch.Tensor) -> None:
 
@@ -59,10 +59,14 @@ class HashBuilderFromModel:
             return batch_elem.squeeze().detach().ceil().int().numpy()
 
         batch_features = np.array(list(map(to_numpy, features)))
+        #
+        # with Pool() as pool:
+        #     pool_data = [(iter_num + idx, feature) for idx, feature in enumerate(batch_features)]
+        #     results = list(pool.starmap(self.query_img_weighted, pool_data))
 
-        with Pool() as pool:
-            pool_data = [(iter_num + idx, feature) for idx, feature in enumerate(batch_features)]
-            pool.starmap(self.query_img_weighted, pool_data)
-            # map(self.query_img_simple,
-            #     [iter_num + idx for idx in range(len(batch_features))],
-            #     batch_features)
+        results = map(self.query_img_weighted,
+                      list(range(iter_num, iter_num + len(batch_features))),
+                      batch_features)
+        for item in results:
+            self.tree.add(**item)
+            self.hash_lsh.insert(**item)
