@@ -1,15 +1,15 @@
 import pandas as pd
-import requests
-from typing import Optional, Iterable, Tuple
+from typing import Optional, Iterable, Tuple, List
 import os
 from tqdm import tqdm
-import concurrent.futures
 import numpy as np
 from pathlib import Path
 from PIL import Image
 import io
 import base64
 import hashlib
+import aiohttp
+import asyncio
 
 
 class CloudImgDatasetLoader:
@@ -75,35 +75,33 @@ class CloudImgDatasetLoader:
         for batch_df in tqdm(self.df_loader):
             subdir = os.path.join(self.img_folder, str(idx))
             self._make_dir(subdir)
-            batch_df = self._load_batch(subdir, batch_df)
+            self.sub_dir = subdir
+            urls, ids = batch_df['url'].to_list(), batch_df['id'].to_list()
+            paths = list(map(self.generate_img_path, ids))
             local_csv_path = os.path.join(self.dfs_folder, f'{idx}.parquet.gzip')
+            batch_df['local_paths'] = paths
             batch_df.to_parquet(local_csv_path, compression='gzip')
             idx += 1
+            asyncio.run(self._load_batch(urls, paths))
 
-    def _load_batch(self, subdir: Path, batch_df: pd.DataFrame) -> pd.DataFrame:
-        urls, ids = batch_df['url'].to_list(), batch_df['id'].to_list()
-        self.sub_dir = subdir
-        paths = list(map(self.generate_img_path, ids))
+    async def _load_batch(self, urls: List[str], paths: List[Path]) -> None:
+        local_paths = map(self.file_download_task, urls, paths)
+        await asyncio.wait(local_paths)
 
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            local_paths = list(tqdm(executor.map(self._load_sample, paths, urls),
-                                    leave=False,
-                                    total=len(urls)))
-
-        batch_df['local_paths'] = local_paths
-        return batch_df
-
-    def _load_sample(self, local_path: Path, url: str) -> Optional[str]:
-        if url.startswith('ipfs://'):
-            url = url.replace('ipfs://', 'https://ipfs.io/ipfs/')
-        try:
-            data = requests.get(url, timeout=10).content
-            image = Image.open(io.BytesIO(data)).convert("RGB")
-        except:
-            return None
-        image = image.resize(self.img_size)
-        image.save(fp=local_path, quality=self.quality, format='JPEG')
+    async def file_download_task(self, url: str, path: Path):
+        content = await self._load_sample(url)
+        local_path = await self._save_img(content, path)
         return local_path
+
+    async def _save_img(self, content: bytes, local_path: Path) -> Optional[str]:
+        if content:
+            try:
+                image = Image.open(io.BytesIO(content)).convert("RGB")
+                image = image.resize(self.img_size)
+                image.save(fp=local_path, quality=self.quality, format='JPEG')
+                return local_path
+            except:
+                return None
 
     def generate_img_path(self, img_id: str) -> Path:
         hasher = hashlib.sha1(str(img_id).encode('utf-8'))
@@ -138,4 +136,18 @@ class CloudImgDatasetLoader:
     def _make_dir(dir_path: str) -> None:
         if not(os.path.exists(dir_path)):
             os.makedirs(dir_path)
+
+    @staticmethod
+    async def _load_sample(url: str) -> Optional[str]:
+        content = None
+        if url.startswith('ipfs://'):
+            url = url.replace('ipfs://', 'https://ipfs.io/ipfs/')
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as response:
+                    content = await response.read()
+        except:
+            pass
+        finally:
+            return content
 
