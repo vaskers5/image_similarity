@@ -88,9 +88,10 @@ class CloudImgDatasetLoader:
         self._make_dir(self.dfs_folder)
 
     def _load_full_data(self, checkpoint_num: Optional[int]) -> None:
-        idx = 0
+        idx = -1
         logger.info('Start downloading loop')
         for batch_df in tqdm(self.df_loader):
+            idx += 1
             if checkpoint_num and idx < checkpoint_num:
                 logger.info(f'Skip {idx} because of previous downloading')
                 continue
@@ -100,12 +101,11 @@ class CloudImgDatasetLoader:
             else:
                 logger.info(f'Checkpoint {idx} on downloading')
                 asyncio.run(self._load_batch(idx, batch_df))
-                idx += 1
                 logger.info(f'Checkpoint {idx} was successfully downloaded')
 
     async def _load_batch(self, idx: int, batch_df: pd.DataFrame, need_saving=True) -> None:
         urls, ids = batch_df['url'].to_list(), batch_df['id'].to_list()
-        image_paths, src_paths = list(map(self._generate_img_path, ids))
+        image_paths, src_paths = self._gen_all_paths(ids)
 
         def chunk(it: Iterable) -> List[Tuple[str]]:
             it = iter(it)
@@ -135,11 +135,13 @@ class CloudImgDatasetLoader:
 
     async def _file_download_task(self, url: str, path: Path, src_path: Path) -> None:
         content = await self._load_sample(url)
-        await self._save_img(content, local_path=path, src_path=src_path)
+        await self._save_img(content, local_path=path, local_source_path=src_path)
 
     async def _save_img(self, content: bytes, local_path: Path, local_source_path: Path) -> None:
         if content:
-            await self.save_file(local_source_path, content)
+            #await self.save_file(local_source_path, content)
+            with open(local_source_path, 'wb') as f:
+                f.write(content)
             try:
                 image = Image.open(io.BytesIO(content)).convert("RGB")
                 for save_type in self.save_conf:
@@ -147,9 +149,7 @@ class CloudImgDatasetLoader:
                         size, quality = tuple(item['size']), item['quality']
                         item_path = f"{local_path}_{size[0]}_{quality}.jpg"
                         image = image.resize(size)
-                        buffer = io.BytesIO
-                        image.save(buffer, quality=quality, format='JPEG')
-                        await self.save_file(item_path, buffer.getbuffer())
+                        image.save(item_path, quality=quality, format='JPEG')
             except Exception as e:
                 logger.debug(e)
                 return None
@@ -172,10 +172,10 @@ class CloudImgDatasetLoader:
 
     def _load_only_left(self, idx, batch_df: pd.DataFrame) -> None:
         ids = batch_df['id'].to_list()
-        image_paths, src_paths = list(map(self._generate_img_path, ids))
+        image_paths, src_paths = self._gen_all_paths(ids)
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            data = list(executor.map(self.clear_checkpoint, image_paths, src_paths))
+            data = list(executor.map(self._clear_checkpoint, image_paths, src_paths))
 
         loaded_image_paths = [item[0] for item in data]
         part_df = batch_df[pd.isna(loaded_image_paths)]
@@ -192,15 +192,14 @@ class CloudImgDatasetLoader:
         paths, src_paths = df.local_path.to_list(), df.src_path.to_list()
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            data = list(executor.map(self.clear_checkpoint, paths, src_paths))
+            data = executor.map(self._clear_checkpoint, paths, src_paths)
 
-        model_img_paths, src_paths = [item[0] for item in data], [item[1] for item in data]
-
-        df['model_img_path'] = model_img_paths
-        df['src_path'] = src_paths
+        model_img_paths, src_paths = zip(*data)
+        df['model_img_path'] = list(model_img_paths)
+        df['src_path'] = list(src_paths)
         df.to_parquet(res_path, compression='gzip')
 
-    def clear_checkpoint(self, path: str, src_path: str) -> Optional[str]:
+    def _clear_checkpoint(self, path: str, src_path: str) -> Optional[str]:
         dev_conf = self.save_conf['dev'][0]
         dev_size, dev_q = dev_conf['size'][0], dev_conf['quality']
         model_img_path = f'{path}_{dev_size}_{dev_q}.jpg'
@@ -214,7 +213,12 @@ class CloudImgDatasetLoader:
         else:
             shutil.rmtree(src_dir_path)
             shutil.rmtree(image_dir_path)
-            return None
+            return None, None
+
+    def _gen_all_paths(self, ids: List[int]) -> Tuple[List[Path]]:
+        data = map(self._generate_img_path, ids)
+        image_paths, src_paths = zip(*data)
+        return list(image_paths), list(src_paths)
 
     @staticmethod
     def _dataframe_preprocessing(df: pd.DataFrame) -> pd.DataFrame:
@@ -239,7 +243,7 @@ class CloudImgDatasetLoader:
             url = url.replace('ipfs://', 'https://ipfs.io/ipfs/')
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url) as response:
+                async with session.get(url, ssl=False) as response:
                     content = await response.read()
         except Exception as e:
             logger.debug(e)
@@ -248,7 +252,7 @@ class CloudImgDatasetLoader:
         finally:
             return content
 
-    @staticmethod
-    async def save_file(path: str, image: memoryview) -> None:
-        async with aiofiles.open(path, "wb") as file:
-            await file.write(image)
+    # @staticmethod
+    # async def save_file(path: str, image: memoryview) -> None:
+    #     async with aiofiles.open(path, "wb") as file:
+    #         await file.write(image)
