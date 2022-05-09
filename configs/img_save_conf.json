@@ -1,41 +1,45 @@
 {
-    "prod": [
-        {
-            "size": [
-                560,
-                560
-            ],
-            "quality": 80
-        },
-        {
-            "size": [
-                1120,
-                1120
-            ],
-            "quality": 80
-        },
-        {
-            "size": [
-                437,
-                437
-            ],
-            "quality": 80
-        },
-        {
-            "size": [
-                874,
-                874
-            ],
-            "quality": 80
-        }
-    ],
-    "dev": [
-        {
-            "size": [
-                256,
-                256
-            ],
-            "quality": 90
-        }
-    ]
+    "img_save_conf": {
+        "prod": [
+            {
+                "size": [
+                    560,
+                    560
+                ],
+                "quality": 80
+            },
+            {
+                "size": [
+                    1120,
+                    1120
+                ],
+                "quality": 80
+            },
+            {
+                "size": [
+                    437,
+                    437
+                ],
+                "quality": 80
+            },
+            {
+                "size": [
+                    874,
+                    874
+                ],
+                "quality": 80
+            }
+        ],
+        "dev": [
+            {
+                "size": [
+                    256,
+                    256
+                ],
+                "quality": 90
+            }
+        ]
+    },
+    "num_splits": 10,
+    "batch_size": 1000
 }
