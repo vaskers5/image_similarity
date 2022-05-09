@@ -12,8 +12,8 @@ import base64
 import hashlib
 import aiohttp
 import asyncio
+import aiofiles
 from loguru import logger
-import magic
 import json
 from itertools import islice
 import concurrent.futures
@@ -81,84 +81,91 @@ class CloudImgDatasetLoader:
     def _make_main_dirs(self, out_dataset_path: str) -> None:
         self.folder = os.path.abspath(out_dataset_path)
         self.img_folder = os.path.join(self.folder, 'img_data')
+        self.src_img_folder = os.path.join(self.folder, 'img_data_src')
         self.dfs_folder = os.path.join(self.folder, 'datasets')
-        self._make_dir(self.img_folder), self._make_dir(self.dfs_folder)
+        self._make_dir(self.img_folder)
+        self._make_dir(self.dfs_folder)
+        self._make_dir(self.dfs_folder)
 
     def _load_full_data(self) -> None:
         idx = 0
         for batch_df in tqdm(self.df_loader):
-            subdir = os.path.join(self.img_folder, str(idx))
-            asyncio.run(self._load_batch(idx, subdir, batch_df))
+            asyncio.run(self._load_batch(idx, batch_df))
             idx += 1
 
-    async def _load_batch(self, idx: int, subdir: Path, batch_df: pd.DataFrame) -> None:
-
-        self._make_dir(subdir)
-        self.sub_dir = subdir
+    async def _load_batch(self, idx: int, batch_df: pd.DataFrame) -> None:
         urls, ids = batch_df['url'].to_list(), batch_df['id'].to_list()
-        paths = list(map(self.generate_img_path, ids))
+        image_paths, src_paths = list(map(self.generate_img_path, ids))
 
         def chunk(it: Iterable) -> List[Tuple[str]]:
             it = iter(it)
             return iter(lambda: tuple(islice(it, self.batch_size)), ())
 
-        full_mime_types = []
-        for batch_urls, batch_paths in tqdm(zip(chunk(urls), chunk(paths))):
-            mime_types = list(map(self.file_download_task, batch_urls, batch_paths))
-            mime_types = await asyncio.gather(*mime_types)
-            full_mime_types += [*mime_types]
+        for batch_urls, batch_image_paths, batch_src_paths in tqdm(zip(chunk(urls),
+                                                                       chunk(image_paths),
+                                                                       chunk(src_paths))):
+            await asyncio.wait(map(self.file_download_task,
+                                   batch_urls,
+                                   batch_image_paths,
+                                   batch_src_paths))
 
         local_csv_path = os.path.join(self.dfs_folder, f'{idx}.parquet.gzip')
-        batch_df['local_path'] = paths
-        batch_df['mime_type'] = full_mime_types
+        batch_df['local_path'] = image_paths
+        batch_df['src_path'] = src_paths
+        batch_df['checkpoint'] = [idx for i in range(len(image_paths))]
         batch_df.to_parquet(local_csv_path, compression='gzip')
 
-    async def file_download_task(self, url: str, path: Path) -> str:
-        data = await self._load_sample(url)
-        await self._save_img(**data, local_path=path)
-        return data['mime_type']
+    async def file_download_task(self, url: str, path: Path, src_path: Path) -> None:
+        content = await self._load_sample(url)
+        await self._save_img(content, local_path=path, src_path=src_path)
 
-    async def _save_img(self, content: bytes, mime_type: str, local_path: Path) -> Optional[str]:
-        if content and mime_type.split('/')[0] == 'image':
+    async def _save_img(self, content: bytes, local_path: Path, local_source_path: Path) -> None:
+        if content:
+            await self.save_file(local_source_path, content)
             try:
                 image = Image.open(io.BytesIO(content)).convert("RGB")
                 for save_type in self.save_conf:
                     for item in self.save_conf[save_type]:
                         size, quality = tuple(item['size']), item['quality']
                         item_path = f"{local_path}_{size[0]}_{quality}.jpg"
-                        image.resize(size).save(fp=item_path, quality=quality, format='JPEG')
-                return local_path
+                        image = image.resize(size)
+                        buffer = io.BytesIO
+                        image.save(buffer, quality=quality, format='JPEG')
+                        await self.save_file(item_path, buffer.getbuffer())
             except Exception as e:
                 logger.debug(e)
                 return None
-        elif content:
-            with open(local_path, 'wb') as f:
-                f.write(content)
 
-    def generate_img_path(self, img_id: str) -> Path:
+    def generate_img_path(self, img_id: str) -> Tuple[Path, Path]:
         hasher = hashlib.sha1(str(img_id).encode('utf-8'))
         image_name = base64.urlsafe_b64encode(hasher.digest()).decode('utf-8')
         image_name = str(image_name).replace('=', '').lower()
         n = 2
         sub_dirs = [image_name[i:i + n] for i in range(0, len(image_name), n)][:3]
-        res_path = self.sub_dir
+        res_path, res_src_path = self.img_folder, self.src_img_folder
         for sub_dir_img in sub_dirs:
             res_path = os.path.join(res_path, sub_dir_img)
+            res_src_path = os.path.join(res_src_path, sub_dir_img)
         self._make_dir(res_path)
+        self._make_dir(res_src_path)
         res_path = os.path.join(res_path, image_name)
-        return res_path
+        res_src_path = os.path.join(res_src_path, image_name)
+        return res_path, res_src_path
 
     def _save_result_df(self) -> None:
 
-        def get_model_paths(path: str) -> Optional[str]:
+        def get_model_paths(path: str, src_path: str) -> Optional[str]:
             model_img_path = f'{path}_{dev_size}_{dev_q}.jpg'
+            image_dir_path = "/".join(path.split('/')[:-1])
+            src_dir_path = "/".join(src_path.split('/')[:-1])
             if os.path.exists(model_img_path):
-                return model_img_path
-            elif os.path.exists(path):
-                return None
+                return model_img_path, src_path
+            elif os.path.exists(src_paths):
+                shutil.rmtree(image_dir_path)
+                return None, src_path
             else:
-                dir_path = "/".join(path.split('/')[:-1])
-                shutil.rmtree(dir_path)
+                shutil.rmtree(src_dir_path)
+                shutil.rmtree(image_dir_path)
                 return None
 
         dev_conf = self.save_conf['dev'][0]
@@ -169,9 +176,9 @@ class CloudImgDatasetLoader:
 
         res_path = os.path.join(self.dfs_folder, 'full_data.parquet.gzip')
         df = pd.concat(dfs, ignore_index=True)
-        paths = df.local_path.to_list()
+        paths, src_paths = df.local_path.to_list(), df.src_path.to_list()
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            model_paths = list(executor.map(get_model_paths, paths))
+            model_paths = list(executor.map(get_model_paths, paths, src_paths))
 
         df['model_img_path'] = model_paths
 
@@ -194,8 +201,7 @@ class CloudImgDatasetLoader:
             os.makedirs(dir_path)
 
     @staticmethod
-    async def _load_sample(url: str) -> Optional[str]:
-        data = {'content': None, 'mime_type': None}
+    async def _load_sample(url: str) -> Optional[bytes]:
         content = None
         if url.startswith('ipfs://'):
             url = url.replace('ipfs://', 'https://ipfs.io/ipfs/')
@@ -208,7 +214,9 @@ class CloudImgDatasetLoader:
             logger.debug(url)
             pass
         finally:
-            if not(content is None):
-                data['mime_type'] = magic.from_buffer(content, mime=True)
-                data['content'] = content
-            return data
+            return content
+
+    @staticmethod
+    async def save_file(path: str, image: memoryview) -> None:
+        async with aiofiles.open(path, "wb") as file:
+            await file.write(image)
