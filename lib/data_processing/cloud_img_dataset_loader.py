@@ -29,7 +29,9 @@ class CloudImgDatasetLoader:
                  df: pd.DataFrame,
                  num_splits: int,
                  batch_size: int,
-                 img_save_conf: json):
+                 out_dataset_path: str,
+                 img_save_conf: json,
+                 last_checkpoint_num: int = None):
         r"""
 
         Class for dataset downloading use it when you want download a very large data,
@@ -46,10 +48,12 @@ class CloudImgDatasetLoader:
 
         batch_size : int num of images async downloading
 
-        saved_img_quality: int quality of saved images
+        img_save_conf:
+            saved_img_quality: int quality of saved images
 
-        img_size: Tuple(int, int) default is (256, 256) the size of saved images
+            img_size: Tuple(int, int) default is (256, 256) the size of saved images
 
+        out_dataset_path : str path for out dataset folder
 
         """
         self.batch_size = batch_size
@@ -58,8 +62,14 @@ class CloudImgDatasetLoader:
         self.img_folder = None
         self.dfs_folder = None
         self.save_conf = img_save_conf
+        self.out_dataset_path = out_dataset_path
+        self.folder = os.path.abspath(out_dataset_path)
+        self.img_folder = os.path.join(self.folder, 'img_data')
+        self.src_img_folder = os.path.join(self.folder, 'img_data_src')
+        self.dfs_folder = os.path.join(self.folder, 'datasets')
+        self.last_checkpoint_num = last_checkpoint_num
 
-    def __call__(self, out_dataset_path: str) -> None:
+    def __call__(self) -> None:
         r""" Function for start downloading.
 
         File structure after downloading:
@@ -67,35 +77,35 @@ class CloudImgDatasetLoader:
         -image_data: directory with folders of images
 
         -datasets: directory with checkpoints of dataframes saved in csv format
-
-        Parameters
-        ----------
-
-        out_dataset_path : str path for out dataset folder
-
         """
-        self._make_main_dirs(out_dataset_path)
-        self._load_full_data()
+        self._make_main_dirs()
+        self._load_full_data(self.last_checkpoint_num)
         self._save_result_df()
 
-    def _make_main_dirs(self, out_dataset_path: str) -> None:
-        self.folder = os.path.abspath(out_dataset_path)
-        self.img_folder = os.path.join(self.folder, 'img_data')
-        self.src_img_folder = os.path.join(self.folder, 'img_data_src')
-        self.dfs_folder = os.path.join(self.folder, 'datasets')
+    def _make_main_dirs(self) -> None:
         self._make_dir(self.img_folder)
         self._make_dir(self.dfs_folder)
         self._make_dir(self.dfs_folder)
 
-    def _load_full_data(self) -> None:
+    def _load_full_data(self, checkpoint_num: Optional[int]) -> None:
         idx = 0
+        logger.info('Start downloading loop')
         for batch_df in tqdm(self.df_loader):
-            asyncio.run(self._load_batch(idx, batch_df))
-            idx += 1
+            if checkpoint_num and idx < checkpoint_num:
+                logger.info(f'Skip {idx} because of previous downloading')
+                continue
+            elif checkpoint_num == idx:
+                logger.info(f'Downloading left images on {checkpoint_num}')
+                self._load_only_left(idx, batch_df)
+            else:
+                logger.info(f'Checkpoint {idx} on downloading')
+                asyncio.run(self._load_batch(idx, batch_df))
+                idx += 1
+                logger.info(f'Checkpoint {idx} was successfully downloaded')
 
-    async def _load_batch(self, idx: int, batch_df: pd.DataFrame) -> None:
+    async def _load_batch(self, idx: int, batch_df: pd.DataFrame, need_saving=True) -> None:
         urls, ids = batch_df['url'].to_list(), batch_df['id'].to_list()
-        image_paths, src_paths = list(map(self.generate_img_path, ids))
+        image_paths, src_paths = list(map(self._generate_img_path, ids))
 
         def chunk(it: Iterable) -> List[Tuple[str]]:
             it = iter(it)
@@ -104,18 +114,26 @@ class CloudImgDatasetLoader:
         for batch_urls, batch_image_paths, batch_src_paths in tqdm(zip(chunk(urls),
                                                                        chunk(image_paths),
                                                                        chunk(src_paths))):
-            await asyncio.wait(map(self.file_download_task,
+            await asyncio.wait(map(self._file_download_task,
                                    batch_urls,
                                    batch_image_paths,
                                    batch_src_paths))
 
+        if need_saving:
+            self.save_checkpoint(idx, batch_df, image_paths, src_paths)
+
+    def save_checkpoint(self,
+                        idx: int,
+                        batch_df: pd.DataFrame,
+                        image_paths: List[Path],
+                        src_paths: List[Path]):
         local_csv_path = os.path.join(self.dfs_folder, f'{idx}.parquet.gzip')
         batch_df['local_path'] = image_paths
         batch_df['src_path'] = src_paths
         batch_df['checkpoint'] = [idx for i in range(len(image_paths))]
         batch_df.to_parquet(local_csv_path, compression='gzip')
 
-    async def file_download_task(self, url: str, path: Path, src_path: Path) -> None:
+    async def _file_download_task(self, url: str, path: Path, src_path: Path) -> None:
         content = await self._load_sample(url)
         await self._save_img(content, local_path=path, src_path=src_path)
 
@@ -136,7 +154,7 @@ class CloudImgDatasetLoader:
                 logger.debug(e)
                 return None
 
-    def generate_img_path(self, img_id: str) -> Tuple[Path, Path]:
+    def _generate_img_path(self, img_id: str) -> Tuple[Path, Path]:
         hasher = hashlib.sha1(str(img_id).encode('utf-8'))
         image_name = base64.urlsafe_b64encode(hasher.digest()).decode('utf-8')
         image_name = str(image_name).replace('=', '').lower()
@@ -152,24 +170,19 @@ class CloudImgDatasetLoader:
         res_src_path = os.path.join(res_src_path, image_name)
         return res_path, res_src_path
 
+    def _load_only_left(self, idx, batch_df: pd.DataFrame) -> None:
+        ids = batch_df['id'].to_list()
+        image_paths, src_paths = list(map(self._generate_img_path, ids))
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            data = list(executor.map(self.clear_checkpoint, image_paths, src_paths))
+
+        loaded_image_paths = [item[0] for item in data]
+        part_df = batch_df[pd.isna(loaded_image_paths)]
+        asyncio.run(self._load_batch(idx, part_df, need_saving=False))
+        self.save_checkpoint(idx, batch_df, image_paths, src_paths)
+
     def _save_result_df(self) -> None:
-
-        def get_model_paths(path: str, src_path: str) -> Optional[str]:
-            model_img_path = f'{path}_{dev_size}_{dev_q}.jpg'
-            image_dir_path = "/".join(path.split('/')[:-1])
-            src_dir_path = "/".join(src_path.split('/')[:-1])
-            if os.path.exists(model_img_path):
-                return model_img_path, src_path
-            elif os.path.exists(src_paths):
-                shutil.rmtree(image_dir_path)
-                return None, src_path
-            else:
-                shutil.rmtree(src_dir_path)
-                shutil.rmtree(image_dir_path)
-                return None
-
-        dev_conf = self.save_conf['dev'][0]
-        dev_size, dev_q = dev_conf['size'][0], dev_conf['quality']
 
         dfs = [pd.read_parquet(os.path.join(self.dfs_folder,
                                             path)) for path in os.listdir(self.dfs_folder)]
@@ -177,18 +190,37 @@ class CloudImgDatasetLoader:
         res_path = os.path.join(self.dfs_folder, 'full_data.parquet.gzip')
         df = pd.concat(dfs, ignore_index=True)
         paths, src_paths = df.local_path.to_list(), df.src_path.to_list()
+
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            model_paths = list(executor.map(get_model_paths, paths, src_paths))
+            data = list(executor.map(self.clear_checkpoint, paths, src_paths))
 
-        df['model_img_path'] = model_paths
+        model_img_paths, src_paths = [item[0] for item in data], [item[1] for item in data]
 
+        df['model_img_path'] = model_img_paths
+        df['src_path'] = src_paths
         df.to_parquet(res_path, compression='gzip')
+
+    def clear_checkpoint(self, path: str, src_path: str) -> Optional[str]:
+        dev_conf = self.save_conf['dev'][0]
+        dev_size, dev_q = dev_conf['size'][0], dev_conf['quality']
+        model_img_path = f'{path}_{dev_size}_{dev_q}.jpg'
+        image_dir_path = "/".join(path.split('/')[:-1])
+        src_dir_path = "/".join(src_path.split('/')[:-1])
+        if os.path.exists(model_img_path):
+            return model_img_path, src_path
+        elif os.path.exists(src_path):
+            shutil.rmtree(image_dir_path)
+            return None, src_path
+        else:
+            shutil.rmtree(src_dir_path)
+            shutil.rmtree(image_dir_path)
+            return None
 
     @staticmethod
     def _dataframe_preprocessing(df: pd.DataFrame) -> pd.DataFrame:
         df = df.dropna(subset=['id', 'url'])
         df = df.drop_duplicates(subset=['id', 'url'], keep='first', ignore_index=True)
-        return df.sample(frac=1).reset_index(drop=True)
+        return df.sample(frac=1, random_state=42).reset_index(drop=True)
 
     @staticmethod
     def split_df_iterator(df: pd.DataFrame, chunks: int) -> Iterable[pd.DataFrame]:

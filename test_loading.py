@@ -16,4 +16,4 @@ if __name__ == "__main__":
     del df['local_path']
 
     loader = CloudImgDatasetLoader(df, **conf)
-    loader(folder_path)
+    loader()
