@@ -5,15 +5,16 @@ import json
 if __name__ == "__main__":
     with open('configs/img_save_conf.json') as f:
         conf = json.load(f)
+    #/mnt/97a55efc-92bc-452a-98d5-d4e3e9dad536/datasets/60m_tokens_ds/full_data_clear.parquet.gzip
+    folder_path = '/mnt/97a55efc-92bc-452a-98d5-d4e3e9dad536/datasets/60m_tokens_ds'
+    dataset_path = f'{folder_path}/full_data_1.parquet.gzip'
+    df = pd.read_parquet(f'{folder_path}/full_data_clear.parquet.gzip')
 
-    # folder_path = '/mnt/0806a469-d019-4d6a-be45-7cff5d66eb22/datasets/60m_tokens_set_1'
-    # dataset_path = f'{folder_path}/30m_data.parquet.gzip'
-    # df = pd.read_parquet(f'{folder_path}/30m_data.parquet.gzip')
-
-    folder_path = 'data/test_loading_folder'
-    dataset_path = 'data/test_infer.csv'
-    df = pd.read_csv(dataset_path)
-    del df['local_path']
-
+    # folder_path = 'data/test_loading_folder'
+    # dataset_path = 'data/test_infer.csv'
+    # df = pd.read_csv(dataset_path)
+    # del df['local_path']
+    # if 'imageUrl' not in df.columns:
+    #     df['imageUrl'] = df['url']
     loader = CloudImgDatasetLoader(df, **conf)
     loader()

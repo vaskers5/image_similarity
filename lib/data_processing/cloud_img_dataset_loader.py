@@ -17,6 +17,10 @@ from loguru import logger
 import json
 from itertools import islice
 import concurrent.futures
+import aiofiles
+from aiohttp_retry import RetryClient, FibonacciRetry
+
+
 
 
 np.random.seed(42)
@@ -152,17 +156,19 @@ class CloudImgDatasetLoader:
 
     async def _save_img(self, content: bytes, local_path: Path, local_source_path: Path) -> None:
         if content:
-            #await self.save_file(local_source_path, content)
-            with open(local_source_path, 'wb') as f:
-                f.write(content)
             try:
-                image = Image.open(io.BytesIO(content)).convert("RGB")
-                for save_type in self.save_conf:
-                    for item in self.save_conf[save_type]:
-                        size, quality = tuple(item['size']), item['quality']
-                        item_path = f"{local_path}_{size[0]}_{quality}.jpg"
-                        image = image.resize(size)
-                        image.save(item_path, quality=quality, format='JPEG')
+                await self.save_file(local_source_path, content)
+                #self.save_file(local_source_path, content)
+            # with open(local_source_path, 'wb') as f:
+            #     f.write(content)
+            # try:
+            #     image = Image.open(io.BytesIO(content)).convert("RGB")
+            #     for save_type in self.save_conf:
+            #         for item in self.save_conf[save_type]:
+            #             size, quality = tuple(item['size']), item['quality']
+            #             item_path = f"{local_path}_{size[0]}_{quality}.jpg"
+            #             image = image.resize(size)
+            #             image.save(item_path, quality=quality, format='JPEG')
             except Exception as e:
                 logger.debug(e)
                 return None
@@ -177,7 +183,7 @@ class CloudImgDatasetLoader:
         for sub_dir_img in sub_dirs:
             res_path = os.path.join(res_path, sub_dir_img)
             res_src_path = os.path.join(res_src_path, sub_dir_img)
-        self._make_dir(res_path)
+        #self._make_dir(res_path)
         self._make_dir(res_src_path)
         res_path = os.path.join(res_path, image_name)
         res_src_path = os.path.join(res_src_path, image_name)
@@ -218,14 +224,14 @@ class CloudImgDatasetLoader:
         model_img_path = f'{path}_{dev_size}_{dev_q}.jpg'
         image_dir_path = "/".join(path.split('/')[:-1])
         src_dir_path = "/".join(src_path.split('/')[:-1])
-        if os.path.exists(model_img_path):
-            return model_img_path, src_path
-        elif os.path.exists(src_path):
-            shutil.rmtree(image_dir_path)
-            return None, src_path
+        # if os.path.exists(model_img_path):
+        #     return model_img_path, src_path
+        if os.path.exists(src_path):
+            #shutil.rmtree(image_dir_path)
+            return path, src_path
         else:
             shutil.rmtree(src_dir_path)
-            shutil.rmtree(image_dir_path)
+            #shutil.rmtree(image_dir_path)
             return None, None
 
     def _gen_all_paths(self, ids: List[int]) -> Tuple[List[Path]]:
@@ -237,6 +243,7 @@ class CloudImgDatasetLoader:
     def _dataframe_preprocessing(df: pd.DataFrame) -> pd.DataFrame:
         df = df.dropna(subset=['id', 'url'])
         df = df.drop_duplicates(subset=['id', 'url'], keep='first', ignore_index=True)
+        df = df[df['imageUrl'] != ""]
         return df.sample(frac=1, random_state=42).reset_index(drop=True)
 
     @staticmethod
@@ -252,14 +259,21 @@ class CloudImgDatasetLoader:
     @staticmethod
     async def _load_sample(url: str) -> Optional[bytes]:
         content = None
+        headers = None
+        proxy_url = random.choice(ALL_PROXY)
+        if proxy_url == 'self_url':
+            proxy_url = None
         if url.startswith('ipfs://'):
             url = url.replace('ipfs://', 'https://ipfs.io/ipfs/')
+        elif 'pinata' in url:
+            headers = {
+                'pinata_api_key': os.getenv('PINATA_API_KEY'),
+                'pinata_secret_api_key': os.getenv('PINATA_SECRET')
+            }
+            proxy_url = None
         try:
-            proxy_url = random.choice(ALL_PROXY)
-            if proxy_url == 'self_url':
-                proxy_url = None
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, proxy=proxy_url, ssl=False) as response:
+            async with RetryClient(retry_options=FibonacciRetry(attempts=5)) as session:
+                async with session.get(url, proxy=proxy_url, ssl=False, headers=headers) as response:
                     content = await response.read()
         except Exception as e:
             logger.debug(e)
@@ -268,7 +282,12 @@ class CloudImgDatasetLoader:
         finally:
             return content
 
+    @staticmethod
+    async def save_file(path: str, image: memoryview) -> None:
+        async with aiofiles.open(path, "wb") as file:
+            await file.write(image)
+
     # @staticmethod
-    # async def save_file(path: str, image: memoryview) -> None:
-    #     async with aiofiles.open(path, "wb") as file:
-    #         await file.write(image)
+    # def save_file(path: str, image: bytes) -> None:
+    #     with open(path, "wb") as file:
+    #         file.write(image)

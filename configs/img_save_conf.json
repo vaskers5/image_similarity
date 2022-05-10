@@ -40,7 +40,7 @@
             }
         ]
     },
-    "num_splits": 2,
-    "batch_size": 1000,
-    "out_dataset_path": "data/test_loading_folder"
+    "num_splits": 60,
+    "batch_size": 5100,
+    "out_dataset_path": "/mnt/97a55efc-92bc-452a-98d5-d4e3e9dad536/datasets/60m_tokens_ds/1_st_dataset"
 }
