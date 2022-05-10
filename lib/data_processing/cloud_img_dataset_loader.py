@@ -12,7 +12,7 @@ import base64
 import hashlib
 import aiohttp
 import asyncio
-import aiofiles
+import random
 from loguru import logger
 import json
 from itertools import islice
@@ -22,6 +22,19 @@ import concurrent.futures
 np.random.seed(42)
 
 logger.add('logs/logs.log', level='DEBUG')
+
+
+def gen_proxy(proxy_id: int) -> str:
+    super_proxy_url = ('http://%s-session-%s:%s@zproxy.lum-superproxy.io:%d' %
+                       (os.getenv('PROXY_USER'),
+                        proxy_id,
+                        os.getenv('PROXY_PASSWORD'),
+                        int(os.getenv("PROXY_PORT"))))
+    return super_proxy_url
+
+
+ALL_PROXY = [gen_proxy(i) for i in range(100)]
+ALL_PROXY.append('self_url')
 
 
 class CloudImgDatasetLoader:
@@ -242,8 +255,11 @@ class CloudImgDatasetLoader:
         if url.startswith('ipfs://'):
             url = url.replace('ipfs://', 'https://ipfs.io/ipfs/')
         try:
+            proxy_url = random.choice(ALL_PROXY)
+            if proxy_url == 'self_url':
+                proxy_url = None
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, ssl=False) as response:
+                async with session.get(url, proxy=proxy_url, ssl=False) as response:
                     content = await response.read()
         except Exception as e:
             logger.debug(e)

@@ -41,6 +41,6 @@
         ]
     },
     "num_splits": 2,
-    "batch_size": 400,
+    "batch_size": 1000,
     "out_dataset_path": "data/test_loading_folder"
 }
