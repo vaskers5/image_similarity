@@ -6,22 +6,26 @@ import os
 from tqdm import tqdm
 import numpy as np
 from pathlib import Path
-from PIL import Image
-import io
+# from PIL import Image
+# import io
 import base64
 import hashlib
-import aiohttp
 import asyncio
 import random
 from loguru import logger
 import json
-from itertools import islice
 import concurrent.futures
 import aiofiles
 from aiohttp_retry import RetryClient, FibonacciRetry
+from sklearn.model_selection import train_test_split
+from copy import deepcopy
+from pandarallel import pandarallel
+from urllib.parse import urlparse
+import subprocess
 
 
-
+pandarallel.initialize(progress_bar=True)
+tqdm.pandas()
 
 np.random.seed(42)
 
@@ -121,20 +125,14 @@ class CloudImgDatasetLoader:
                 logger.info(f'Checkpoint {idx} was successfully downloaded')
 
     async def _load_batch(self, idx: int, batch_df: pd.DataFrame, need_saving=True) -> None:
-        urls, ids = batch_df['url'].to_list(), batch_df['id'].to_list()
-        image_paths, src_paths = self._gen_all_paths(ids)
 
-        def chunk(it: Iterable) -> List[Tuple[str]]:
-            it = iter(it)
-            return iter(lambda: tuple(islice(it, self.batch_size)), ())
-
-        for batch_urls, batch_image_paths, batch_src_paths in tqdm(zip(chunk(urls),
-                                                                       chunk(image_paths),
-                                                                       chunk(src_paths))):
+        for stratified_batch in  self._get_stratified_batches(batch_df, self.batch_size):
+            urls, ids = stratified_batch['url'].to_list(), stratified_batch['id'].to_list()
+            image_paths, src_paths = self._gen_all_paths(ids)
             await asyncio.wait(map(self._file_download_task,
-                                   batch_urls,
-                                   batch_image_paths,
-                                   batch_src_paths))
+                                   urls,
+                                   image_paths,
+                                   src_paths))
 
         if need_saving:
             self.save_checkpoint(idx, batch_df, image_paths, src_paths)
@@ -241,15 +239,38 @@ class CloudImgDatasetLoader:
 
     @staticmethod
     def _dataframe_preprocessing(df: pd.DataFrame) -> pd.DataFrame:
+        logger.info('Start dataframe preprocessing!')
         df = df.dropna(subset=['id', 'url'])
         df = df.drop_duplicates(subset=['id', 'url'], keep='first', ignore_index=True)
-        df = df[df['imageUrl'] != ""]
+        df = df[df['url'] != ""]
+        df['domen'] = list(df.imageUrl.parallel_apply(lambda url: urlparse(url).netloc))
         return df.sample(frac=1, random_state=42).reset_index(drop=True)
 
     @staticmethod
     def split_df_iterator(df: pd.DataFrame, chunks: int) -> Iterable[pd.DataFrame]:
         for chunk in np.array_split(df, chunks):
             yield chunk
+
+    @staticmethod
+    def _get_stratified_batches(df: pd.DataFrame, batch_size: int):
+        def get_batch(state_df: pd.DataFrame, micro_batch_size: int) -> pd.DataFrame:
+            x_train, x_test, y_train, y_test = train_test_split(state_df,
+                                                                state_df['domen'].to_list(),
+                                                                test_size=micro_batch_size,
+                                                                random_state=42)
+            return x_test
+
+        batched_df = deepcopy(df)
+        batches = []
+        iter_num = int(len(batched_df) / batch_size)
+        for i in range(iter_num):
+            if len(batched_df) > batch_size:
+                batch = get_batch(batched_df, batch_size)
+            else:
+                batch = deepcopy(batched_df)
+            batches += [batch]
+            batched_df = batched_df[-batched_df['id'].isin(batch['id'].to_list())]
+            yield batch
 
     @staticmethod
     def _make_dir(dir_path: str) -> None:
@@ -265,14 +286,19 @@ class CloudImgDatasetLoader:
             proxy_url = None
         if url.startswith('ipfs://'):
             url = url.replace('ipfs://', 'https://ipfs.io/ipfs/')
-        elif 'pinata' in url:
+        # url = url.replace('gateway.pinata.cloud', 'pixelplex.pinata.cloud')
+
+        if 'pinata.cloud' in url:
             headers = {
                 'pinata_api_key': os.getenv('PINATA_API_KEY'),
                 'pinata_secret_api_key': os.getenv('PINATA_SECRET')
             }
+            url = url.replace('https://gateway.pinata.cloud/', 'https://pixelplex.mypinata.cloud/')
             proxy_url = None
+        elif 'ipfs' in url:
+
         try:
-            async with RetryClient(retry_options=FibonacciRetry(attempts=5)) as session:
+            async with RetryClient(retry_options=FibonacciRetry(attempts=10)) as session:
                 async with session.get(url, proxy=proxy_url, ssl=False, headers=headers) as response:
                     content = await response.read()
         except Exception as e:
@@ -286,6 +312,10 @@ class CloudImgDatasetLoader:
     async def save_file(path: str, image: memoryview) -> None:
         async with aiofiles.open(path, "wb") as file:
             await file.write(image)
+
+    @staticmethod
+    async def get_from_ipfs(url: str) -> bytes:
+        await asyncio.subprocess.create_subprocess_shell()
 
     # @staticmethod
     # def save_file(path: str, image: bytes) -> None:

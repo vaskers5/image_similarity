@@ -1,6 +1,9 @@
 from lib.data_processing import CloudImgDatasetLoader
 import pandas as pd
 import json
+import os
+
+
 
 if __name__ == "__main__":
     with open('configs/img_save_conf.json') as f:
@@ -14,7 +17,7 @@ if __name__ == "__main__":
     # dataset_path = 'data/test_infer.csv'
     # df = pd.read_csv(dataset_path)
     # del df['local_path']
-    # if 'imageUrl' not in df.columns:
-    #     df['imageUrl'] = df['url']
+    if 'url' not in df.columns:
+        df['url'] = df['imageUrl']
     loader = CloudImgDatasetLoader(df, **conf)
     loader()
