@@ -22,6 +22,9 @@ from copy import deepcopy
 from pandarallel import pandarallel
 from urllib.parse import urlparse
 import subprocess
+from lib.db_store import DBStore
+
+
 
 
 pandarallel.initialize(progress_bar=True)
@@ -78,6 +81,7 @@ class CloudImgDatasetLoader:
 
         """
         self.batch_size = batch_size
+        #self.db_store = DBStore()
         self.df_loader = self.split_df_iterator(self._dataframe_preprocessing(df), num_splits)
         self.folder = None
         self.img_folder = None
@@ -89,6 +93,20 @@ class CloudImgDatasetLoader:
         self.src_img_folder = os.path.join(self.folder, 'img_data_src')
         self.dfs_folder = os.path.join(self.folder, 'datasets')
         self.last_checkpoint_num = last_checkpoint_num
+
+    def load_ipfs_samples(self) -> None:
+        for idx, batch_df in enumerate(tqdm(self.df_loader)):
+            image_paths, src_paths = self._load_ipfs_batch(batch_df)
+            self.save_checkpoint(idx, batch_df, image_paths, src_paths)
+
+    def _load_ipfs_batch(self, batch_df: pd.DataFrame):
+        urls, ids = batch_df['url'].to_list(), batch_df['id'].to_list()
+        image_paths, src_paths = self._gen_all_paths(ids)
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            tqdm(executor.map(self.load_ipfs_file, urls, src_paths),
+                 leave=False,
+                 total=len(image_paths))
+        return image_paths, src_paths
 
     def __call__(self) -> None:
         r""" Function for start downloading.
@@ -126,14 +144,13 @@ class CloudImgDatasetLoader:
 
     async def _load_batch(self, idx: int, batch_df: pd.DataFrame, need_saving=True) -> None:
 
-        for stratified_batch in  self._get_stratified_batches(batch_df, self.batch_size):
+        for stratified_batch in self._get_stratified_batches(batch_df, self.batch_size):
             urls, ids = stratified_batch['url'].to_list(), stratified_batch['id'].to_list()
             image_paths, src_paths = self._gen_all_paths(ids)
             await asyncio.wait(map(self._file_download_task,
                                    urls,
                                    image_paths,
                                    src_paths))
-
         if need_saving:
             self.save_checkpoint(idx, batch_df, image_paths, src_paths)
 
@@ -243,7 +260,8 @@ class CloudImgDatasetLoader:
         df = df.dropna(subset=['id', 'url'])
         df = df.drop_duplicates(subset=['id', 'url'], keep='first', ignore_index=True)
         df = df[df['url'] != ""]
-        df['domen'] = list(df.imageUrl.parallel_apply(lambda url: urlparse(url).netloc))
+        df = df[df.url.parallel_apply(lambda url: 'ipfs' in url)]
+        #df['domen'] = list(df.imageUrl.parallel_apply(lambda url: urlparse(url).netloc))
         return df.sample(frac=1, random_state=42).reset_index(drop=True)
 
     @staticmethod
@@ -277,8 +295,7 @@ class CloudImgDatasetLoader:
         if not(os.path.exists(dir_path)):
             os.makedirs(dir_path)
 
-    @staticmethod
-    async def _load_sample(url: str) -> Optional[bytes]:
+    async def _load_sample(self, url: str) -> Optional[bytes]:
         content = None
         headers = None
         proxy_url = random.choice(ALL_PROXY)
@@ -295,8 +312,6 @@ class CloudImgDatasetLoader:
             }
             url = url.replace('https://gateway.pinata.cloud/', 'https://pixelplex.mypinata.cloud/')
             proxy_url = None
-        elif 'ipfs' in url:
-
         try:
             async with RetryClient(retry_options=FibonacciRetry(attempts=10)) as session:
                 async with session.get(url, proxy=proxy_url, ssl=False, headers=headers) as response:
@@ -314,8 +329,15 @@ class CloudImgDatasetLoader:
             await file.write(image)
 
     @staticmethod
-    async def get_from_ipfs(url: str) -> bytes:
-        await asyncio.subprocess.create_subprocess_shell()
+    def load_ipfs_file(url: str, path: Path):
+        token_id = url[url.find('ipfs/'):].replace('ipfs/', '')
+        try:
+            logger.info(f'{url} was downloaded!')
+            subprocess.call(f'ipfs get {token_id} --output {str(path)}')
+            return True
+        except Exception as e:
+            logger.error(e)
+            return None
 
     # @staticmethod
     # def save_file(path: str, image: bytes) -> None:
