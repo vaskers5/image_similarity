@@ -25,6 +25,12 @@ import subprocess
 from lib.db_store import DBStore
 
 
+os.environ['PINATA_API_KEY'] = '007a645db305c7e42d79'
+os.environ['PINATA_SECRET'] = '69ce8871e203b46cd16ea993f929db7de41bc7b61f5e129938ef7fe904f944c7'
+os.environ['PROXY_PASSWORD'] = 'to08bx2tnx2u'
+os.environ['PROXY_PORT'] = '22225'
+os.environ['PROXY_USER'] = 'lum-customer-hl_1aa52067-zone-checknft_unlimited'
+
 
 
 pandarallel.initialize(progress_bar=True)
@@ -260,8 +266,8 @@ class CloudImgDatasetLoader:
         df = df.dropna(subset=['id', 'url'])
         df = df.drop_duplicates(subset=['id', 'url'], keep='first', ignore_index=True)
         df = df[df['url'] != ""]
-        df = df[df.url.parallel_apply(lambda url: 'ipfs' in url)]
-        #df['domen'] = list(df.imageUrl.parallel_apply(lambda url: urlparse(url).netloc))
+        #df = df[df.url.parallel_apply(lambda url: 'ipfs' in url)]
+        df['domen'] = list(df.imageUrl.parallel_apply(lambda url: urlparse(url).netloc))
         return df.sample(frac=1, random_state=42).reset_index(drop=True)
 
     @staticmethod
@@ -310,10 +316,10 @@ class CloudImgDatasetLoader:
                 'pinata_api_key': os.getenv('PINATA_API_KEY'),
                 'pinata_secret_api_key': os.getenv('PINATA_SECRET')
             }
-            url = url.replace('https://gateway.pinata.cloud/', 'https://pixelplex.mypinata.cloud/')
+            url = url.replace('pinata.cloud', 'pixelplex.mypinata.cloud')
             proxy_url = None
         try:
-            async with RetryClient(retry_options=FibonacciRetry(attempts=10)) as session:
+            async with RetryClient(retry_options=FibonacciRetry(attempts=3, max_timeout=10)) as session:
                 async with session.get(url, proxy=proxy_url, ssl=False, headers=headers) as response:
                     content = await response.read()
         except Exception as e:
