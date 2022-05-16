@@ -1,4 +1,3 @@
-import shutil
 import pandas as pd
 import os
 from tqdm import tqdm
@@ -11,11 +10,12 @@ from aiohttp_retry import RetryClient, FibonacciRetry
 from sklearn.model_selection import train_test_split
 from copy import deepcopy
 from pandarallel import pandarallel
-from urllib.parse import urlparse
-from typing import Optional, Tuple, Iterable, List
+from typing import Optional
 
-from .abstract_loader import AbstractLoader
 
+from lib.data_loaders.abstract_loader import AbstractLoader
+
+HOST_IPFS_URL = "http://212.98.190.240:8080/ipfs"
 
 pandarallel.initialize(progress_bar=True)
 tqdm.pandas()
@@ -73,15 +73,6 @@ class CloudImgDatasetLoader(AbstractLoader):
         return final_paths, final_status_codes
 
     @staticmethod
-    def _dataframe_preprocessing(df: pd.DataFrame) -> pd.DataFrame:
-        logger.info('Start dataframe preprocessing!')
-        df = df.dropna(subset=['id', 'imageUrl'])
-        df = df.drop_duplicates(subset=['id', 'imageUrl'], keep='first', ignore_index=True)
-        df = df[df['imageUrl'] != ""]
-        df['domen'] = list(df.imageUrl.parallel_apply(lambda url: urlparse(url).netloc))
-        return df
-
-    @staticmethod
     def _get_stratified_batches(df: pd.DataFrame, batch_size: int):
         def get_batch(state_df: pd.DataFrame, micro_batch_size: int) -> pd.DataFrame:
             x_train, x_test, y_train, y_test = train_test_split(state_df,
@@ -92,7 +83,7 @@ class CloudImgDatasetLoader(AbstractLoader):
 
         batched_df = deepcopy(df)
         batches = []
-        iter_num = int(len(batched_df) / batch_size)
+        iter_num = int(len(batched_df) / batch_size) + 1
         for i in range(iter_num):
             if len(batched_df) > batch_size:
                 batch = get_batch(batched_df, batch_size)
@@ -110,9 +101,9 @@ class CloudImgDatasetLoader(AbstractLoader):
         old_url = deepcopy(url)
         if proxy_url == 'self_url':
             proxy_url = None
-        if url.startswith('ipfs://'):
-            url = url.replace('ipfs://', 'https://ipfs.io/ipfs/')
-
+        if 'ipfs' in url:
+            url = f"{HOST_IPFS_URL}/{url[url.find('ipfs/'):].replace('ipfs/', '')}"
+            proxy_url = None
         if 'pinata.cloud' in url:
             headers = {
                 'pinata_api_key': os.getenv('PINATA_API_KEY'),
@@ -121,7 +112,7 @@ class CloudImgDatasetLoader(AbstractLoader):
             url = url.replace('pinata.cloud', 'pixelplex.mypinata.cloud')
             proxy_url = None
         try:
-            async with RetryClient(retry_options=FibonacciRetry(attempts=1, max_timeout=3)) as session:
+            async with RetryClient(retry_options=FibonacciRetry(attempts=1, max_timeout=1)) as session:
                 async with session.get(url, proxy=proxy_url, ssl=False, headers=headers) as response:
                     content = await response.read()
         except Exception as e:
@@ -131,3 +122,4 @@ class CloudImgDatasetLoader(AbstractLoader):
             return content, e.status_code
         finally:
             return content, 200
+

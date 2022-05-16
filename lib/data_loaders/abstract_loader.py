@@ -1,7 +1,7 @@
 from abc import ABC
 import os
 import pandas as pd
-import json
+from loguru import logger
 import aiofiles
 import shutil
 from typing import Tuple, Optional, List
@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import base64
 import hashlib
+from urllib.parse import urlparse
 
 
 from containers import SqlConnector
@@ -73,11 +74,22 @@ class AbstractLoader(ABC):
             return str(path).replace(main_folder, '')
 
         place_holder = [None for i in range(len(batch_df))]
+        meta_data = []
+
+        urls = batch_df['imageUrl'].to_list()
+        for idx, url in enumerate(batch_df['imageUrl'].to_list()):
+
+            if len(url) >= 254:
+                urls[idx] = None
+                meta_data += [url]
+            else:
+                meta_data += [None]
+
         save_df = pd.DataFrame({
             'filePath': list(map(cut_path, src_paths)),
-            'fileData': place_holder,
+            'fileData': meta_data,
             'fileType': place_holder,
-            'fileRemoteUrl': batch_df['imageUrl'].to_list(),
+            'fileRemoteUrl': urls,
             'tokenId': batch_df['id'].astype(int).to_list(),
             'statusCode': status_codes
         })
@@ -122,6 +134,15 @@ class AbstractLoader(ABC):
 
     def _make_main_dirs(self) -> None:
         self._make_dir(self.src_img_folder)
+
+    @staticmethod
+    def _dataframe_preprocessing(df: pd.DataFrame) -> pd.DataFrame:
+        logger.info('Start dataframe preprocessing!')
+        df = df.dropna(subset=['id', 'imageUrl'])
+        df = df.drop_duplicates(subset=['id', 'imageUrl'], keep='first', ignore_index=True)
+        df = df[df['imageUrl'] != ""]
+        df['domen'] = list(df.imageUrl.parallel_apply(lambda url: urlparse(url).netloc))
+        return df
 
     @staticmethod
     def _clear_checkpoint(src_path: str) -> Optional[str]:

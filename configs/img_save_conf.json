@@ -1,5 +1,5 @@
 {
-    "seq_len": 100,
+    "seq_len": 50,
     "batch_size": 25,
-    "out_dataset_path": "/mnt/97a55efc-92bc-452a-98d5-d4e3e9dad536/datasets/60m_tokens_ds/1_st_dataset"
+    "out_dataset_path": "/mnt/97a55efc-92bc-452a-98d5-d4e3e9dad536/datasets/60m_tokens_ds/2_st_dataset"
 }
