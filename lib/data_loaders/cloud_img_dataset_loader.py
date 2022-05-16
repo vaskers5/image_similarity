@@ -56,33 +56,24 @@ class CloudImgDatasetLoader(AbstractLoader):
         self._make_dir(self.dfs_folder)
         self._make_dir(self.dfs_folder)
 
-    def _load_full_data(self, checkpoint_num: Optional[int]) -> None:
-        idx = -1
+    def _load_full_data(self) -> None:
         logger.info('Start downloading loop')
-        for batch_df in tqdm(self.df_loader):
-            idx += 1
-            if checkpoint_num and idx < checkpoint_num:
-                logger.info(f'Skip {idx} because of previous downloading')
-                continue
-            elif checkpoint_num == idx:
-                logger.info(f'Downloading left images on {checkpoint_num}')
-                self._load_only_left(idx, batch_df)
-            else:
-                logger.info(f'Checkpoint {idx} on downloading')
-                asyncio.run(self._load_batch(idx, batch_df))
-                logger.info(f'Checkpoint {idx} was successfully downloaded')
+        for idx, batch_df in enumerate(self.df_iterator):
+            batch_df = self._dataframe_preprocessing(batch_df)
+            logger.info(f'Checkpoint {idx} on downloading')
+            asyncio.run(self._load_batch(idx, batch_df))
+            logger.info(f'Checkpoint {idx} was successfully downloaded')
 
     async def _load_batch(self, idx: int, batch_df: pd.DataFrame, need_saving=True) -> None:
 
         for stratified_batch in self._get_stratified_batches(batch_df, self.batch_size):
             urls, ids = stratified_batch['url'].to_list(), stratified_batch['id'].to_list()
-            image_paths, src_paths = self._gen_all_paths(ids)
-            await asyncio.wait(map(self._file_download_task,
-                                   urls,
-                                   image_paths,
-                                   src_paths))
+            src_paths = self._gen_all_paths(ids)
+            statuses = await asyncio.wait(map(self._file_download_task,
+                                              urls,
+                                              src_paths))
         if need_saving:
-            self.save_checkpoint(idx, batch_df, image_paths, src_paths)
+            self.save_checkpoint(batch_df, src_paths, statuses)
 
     @staticmethod
     def _dataframe_preprocessing(df: pd.DataFrame) -> pd.DataFrame:
@@ -123,7 +114,6 @@ class CloudImgDatasetLoader(AbstractLoader):
             proxy_url = None
         if url.startswith('ipfs://'):
             url = url.replace('ipfs://', 'https://ipfs.io/ipfs/')
-        # url = url.replace('gateway.pinata.cloud', 'pixelplex.pinata.cloud')
 
         if 'pinata.cloud' in url:
             headers = {
@@ -133,13 +123,12 @@ class CloudImgDatasetLoader(AbstractLoader):
             url = url.replace('pinata.cloud', 'pixelplex.mypinata.cloud')
             proxy_url = None
         try:
-            async with RetryClient(retry_options=FibonacciRetry(attempts=3, max_timeout=10)) as session:
+            async with RetryClient(retry_options=FibonacciRetry(attempts=1, max_timeout=3)) as session:
                 async with session.get(url, proxy=proxy_url, ssl=False, headers=headers) as response:
                     content = await response.read()
         except Exception as e:
             logger.debug(e)
             logger.debug(url)
-            pass
+            return content, e.status_code
         finally:
-            return content
-
+            return content, 200

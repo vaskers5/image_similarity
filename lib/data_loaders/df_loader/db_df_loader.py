@@ -5,7 +5,10 @@ from containers import SqlConnector
 
 
 class DbDfLoader(IDfLoader):
-    def load(self, batch_size: int = 1000) -> Iterable:
+    def __init__(self, seq_len: int):
+        self.seq_len = seq_len
+
+    def load(self) -> Iterable:
         db_con = SqlConnector.sql_connector()
-        for i in range(1, db_con.get_last_bd_id(), batch_size):
-            yield db_con.read_rows(offset=i, n_rows=batch_size)
+        for i in range(1, db_con.get_last_bd_id(), self.seq_len):
+            yield db_con.read_rows(start=i, seq_len=self.seq_len)

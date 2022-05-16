@@ -18,10 +18,9 @@ from lib.data_loaders.df_loader import Idf_loader
 class AbstractLoader(ABC):
     def __init__(self,
                  df_iterator: Idf_loader,
+                 seq_len: int,
                  batch_size: int,
-                 out_dataset_path: str,
-                 img_save_conf: json,
-                 last_checkpoint_num: int = None):
+                 out_dataset_path: str):
         r"""
 
         Class for dataset downloading use it when you want download a very large data,
@@ -30,33 +29,23 @@ class AbstractLoader(ABC):
 
         Parameters
         ----------
+        seq_len: int how many rows you want to get from df_iterator for one iteration
 
         df_iterator : Iterable you need to create/choose dataframe custom generator
 
         batch_size : int num of images async downloading
 
-        img_save_conf:
-            saved_img_quality: int quality of saved images
-
-            img_size: Tuple(int, int) default is (256, 256) the size of saved images
-
         out_dataset_path : str path for out dataset folder
 
         """
         self.batch_size = batch_size
-        self.df_iterator = df_iterator
+        self.df_iterator = df_iterator(seq_len)
         self.db_store = SqlConnector.sql_connector()
         self.df_loader = Idf_loader
         self.folder = None
-        self.img_folder = None
-        self.dfs_folder = None
-        self.save_conf = img_save_conf
         self.out_dataset_path = out_dataset_path
         self.folder = os.path.abspath(out_dataset_path)
-        self.img_folder = os.path.join(self.folder, 'img_data')
         self.src_img_folder = os.path.join(self.folder, 'img_data_src')
-        self.dfs_folder = os.path.join(self.folder, 'datasets')
-        self.last_checkpoint_num = last_checkpoint_num
 
     def __call__(self) -> None:
         r""" Function for start downloading.
@@ -68,7 +57,8 @@ class AbstractLoader(ABC):
         -datasets: directory with checkpoints of dataframes saved in csv format
         """
         self._make_main_dirs()
-        self._load_full_data(self.last_checkpoint_num)
+        self._load_full_data()
+
 
     def save_checkpoint(self,
                         batch_df: pd.DataFrame,
@@ -97,14 +87,21 @@ class AbstractLoader(ABC):
     async def _load_batch(self, idx: int, batch_df: pd.DataFrame, need_saving=True) -> None:
         raise NotImplementedError
 
-    async def _file_download_task(self, url: str, path: Path, src_path: Path) -> None:
+    async def _file_download_task(self, url: str, src_path: Path) -> None:
         if not os.path.exists(src_path):
-            content = await self._load_sample(url)
-            await self._save_img(content, local_path=path, local_source_path=src_path)
+            content, load_status = await self._load_sample(url)
+            save_status = await self._save_img(content, local_source_path=src_path)
+            return save_status if save_status else load_status
+        else:
+            return 200
 
     async def _save_img(self, content: bytes, local_source_path: Path) -> None:
         if content:
-            await self.save_file(local_source_path, content)
+            try:
+                await self.save_file(local_source_path, content)
+                return 200
+            except Exception as e:
+                return 665
 
     def _generate_img_path(self, img_id: str) -> Tuple[Path, Path]:
         hasher = hashlib.sha1(str(img_id).encode('utf-8'))
@@ -121,14 +118,11 @@ class AbstractLoader(ABC):
         return final_res_path
 
     def _gen_all_paths(self, ids: List[int]) -> Tuple[List[Path]]:
-        data = map(self._generate_img_path, ids)
-        image_paths, src_paths = zip(*data)
-        return list(image_paths), list(src_paths)
+        src_paths = map(self._generate_img_path, ids)
+        return list(src_paths)
 
     def _make_main_dirs(self) -> None:
-        self._make_dir(self.img_folder)
-        self._make_dir(self.dfs_folder)
-        self._make_dir(self.dfs_folder)
+        self._make_dir(self.src_img_folder)
 
     @staticmethod
     def _clear_checkpoint(src_path: str) -> Optional[str]:

@@ -1,46 +1,5 @@
 {
-    "img_save_conf": {
-        "prod": [
-            {
-                "size": [
-                    560,
-                    560
-                ],
-                "quality": 80
-            },
-            {
-                "size": [
-                    1120,
-                    1120
-                ],
-                "quality": 80
-            },
-            {
-                "size": [
-                    437,
-                    437
-                ],
-                "quality": 80
-            },
-            {
-                "size": [
-                    874,
-                    874
-                ],
-                "quality": 80
-            }
-        ],
-        "dev": [
-            {
-                "size": [
-                    256,
-                    256
-                ],
-                "quality": 90
-            }
-        ]
-    },
-    "num_splits": 12,
+    "db_seq_len": 1000000,
     "batch_size": 1750,
     "out_dataset_path": "/mnt/97a55efc-92bc-452a-98d5-d4e3e9dad536/datasets/60m_tokens_ds/1_st_dataset"
 }
