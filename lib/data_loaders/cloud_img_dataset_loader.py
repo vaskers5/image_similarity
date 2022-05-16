@@ -61,10 +61,10 @@ class CloudImgDatasetLoader(AbstractLoader):
         for idx, batch_df in enumerate(self.df_iterator):
             batch_df = self._dataframe_preprocessing(batch_df)
             logger.info(f'Checkpoint {idx} on downloading')
-            asyncio.run(self._load_batch(idx, batch_df))
+            asyncio.run(self._load_batch(batch_df))
             logger.info(f'Checkpoint {idx} was successfully downloaded')
 
-    async def _load_batch(self, idx: int, batch_df: pd.DataFrame, need_saving=True) -> None:
+    async def _load_batch(self, batch_df: pd.DataFrame, need_saving=True) -> None:
 
         for stratified_batch in self._get_stratified_batches(batch_df, self.batch_size):
             urls, ids = stratified_batch['url'].to_list(), stratified_batch['id'].to_list()
@@ -82,7 +82,7 @@ class CloudImgDatasetLoader(AbstractLoader):
         df = df.drop_duplicates(subset=['id', 'url'], keep='first', ignore_index=True)
         df = df[df['url'] != ""]
         df['domen'] = list(df.imageUrl.parallel_apply(lambda url: urlparse(url).netloc))
-        return df.sample(frac=1, random_state=42).reset_index(drop=True)
+        return df
 
     @staticmethod
     def _get_stratified_batches(df: pd.DataFrame, batch_size: int):
