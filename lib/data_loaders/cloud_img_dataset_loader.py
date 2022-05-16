@@ -34,7 +34,7 @@ def gen_proxy(proxy_id: int) -> str:
     return super_proxy_url
 
 
-ALL_PROXY = [gen_proxy(i) for i in range(100)]
+ALL_PROXY = [gen_proxy(i) for i in range(120)]
 ALL_PROXY.append('self_url')
 
 
@@ -43,7 +43,7 @@ class CloudImgDatasetLoader(AbstractLoader):
         super().__init__(**kwargs)
 
     def _load_ipfs_batch(self, batch_df: pd.DataFrame):
-        urls, ids = batch_df['url'].to_list(), batch_df['id'].to_list()
+        urls, ids = batch_df['imageUrl'].to_list(), batch_df['id'].to_list()
         image_paths, src_paths = self._gen_all_paths(ids)
         with concurrent.futures.ThreadPoolExecutor() as executor:
             tqdm(executor.map(self.load_ipfs_file, urls, src_paths),
@@ -51,36 +51,33 @@ class CloudImgDatasetLoader(AbstractLoader):
                  total=len(image_paths))
         return image_paths, src_paths
 
-    def _make_main_dirs(self) -> None:
-        self._make_dir(self.img_folder)
-        self._make_dir(self.dfs_folder)
-        self._make_dir(self.dfs_folder)
-
     def _load_full_data(self) -> None:
         logger.info('Start downloading loop')
         for idx, batch_df in enumerate(self.df_iterator):
             batch_df = self._dataframe_preprocessing(batch_df)
             logger.info(f'Checkpoint {idx} on downloading')
-            asyncio.run(self._load_batch(batch_df))
+            loop = asyncio.get_event_loop()
+            final_paths, statuses = loop.run_until_complete(self._load_batch(batch_df))
+            self.save_checkpoint(batch_df, final_paths, statuses)
             logger.info(f'Checkpoint {idx} was successfully downloaded')
 
-    async def _load_batch(self, batch_df: pd.DataFrame, need_saving=True) -> None:
-
+    async def _load_batch(self, batch_df: pd.DataFrame) -> None:
+        final_paths, final_status_codes = [], []
         for stratified_batch in self._get_stratified_batches(batch_df, self.batch_size):
-            urls, ids = stratified_batch['url'].to_list(), stratified_batch['id'].to_list()
+            urls, ids = stratified_batch['imageUrl'].to_list(), stratified_batch['id'].to_list()
             src_paths = self._gen_all_paths(ids)
-            statuses = await asyncio.wait(map(self._file_download_task,
-                                              urls,
-                                              src_paths))
-        if need_saving:
-            self.save_checkpoint(batch_df, src_paths, statuses)
+            final_paths += [*src_paths]
+            statuses = await asyncio.wait(map(self._file_download_task, urls, src_paths))
+            statuses = [status.result() for status in statuses[0]]
+            final_status_codes += [*statuses]
+        return final_paths, final_status_codes
 
     @staticmethod
     def _dataframe_preprocessing(df: pd.DataFrame) -> pd.DataFrame:
         logger.info('Start dataframe preprocessing!')
-        df = df.dropna(subset=['id', 'url'])
-        df = df.drop_duplicates(subset=['id', 'url'], keep='first', ignore_index=True)
-        df = df[df['url'] != ""]
+        df = df.dropna(subset=['id', 'imageUrl'])
+        df = df.drop_duplicates(subset=['id', 'imageUrl'], keep='first', ignore_index=True)
+        df = df[df['imageUrl'] != ""]
         df['domen'] = list(df.imageUrl.parallel_apply(lambda url: urlparse(url).netloc))
         return df
 
@@ -110,6 +107,7 @@ class CloudImgDatasetLoader(AbstractLoader):
         content = None
         headers = None
         proxy_url = random.choice(ALL_PROXY)
+        old_url = deepcopy(url)
         if proxy_url == 'self_url':
             proxy_url = None
         if url.startswith('ipfs://'):
@@ -129,6 +127,7 @@ class CloudImgDatasetLoader(AbstractLoader):
         except Exception as e:
             logger.debug(e)
             logger.debug(url)
+            logger.debug(old_url)
             return content, e.status_code
         finally:
             return content, 200

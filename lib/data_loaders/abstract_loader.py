@@ -39,7 +39,7 @@ class AbstractLoader(ABC):
 
         """
         self.batch_size = batch_size
-        self.df_iterator = df_iterator(seq_len)
+        self.df_iterator = df_iterator(seq_len).load()
         self.db_store = SqlConnector.sql_connector()
         self.df_loader = Idf_loader
         self.folder = None
@@ -59,14 +59,13 @@ class AbstractLoader(ABC):
         self._make_main_dirs()
         self._load_full_data()
 
-
     def save_checkpoint(self,
                         batch_df: pd.DataFrame,
                         src_paths: List[Path],
                         status_codes: List[int]):
 
         with ThreadPoolExecutor() as executor:
-            src_paths = executor.map(self._clear_checkpoint, src_paths)
+            src_paths = list(executor.map(self._clear_checkpoint, src_paths))
 
         main_folder = "/".join(str(self.folder).split('/')[:-2])
 
@@ -78,7 +77,7 @@ class AbstractLoader(ABC):
             'filePath': list(map(cut_path, src_paths)),
             'fileData': place_holder,
             'fileType': place_holder,
-            'fileRemoteUrl': batch_df['url'].to_list(),
+            'fileRemoteUrl': batch_df['imageUrl'].to_list(),
             'tokenId': batch_df['id'].astype(int).to_list(),
             'statusCode': status_codes
         })
