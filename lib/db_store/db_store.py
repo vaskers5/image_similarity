@@ -1,21 +1,28 @@
 from sqlalchemy import create_engine
-import os
 import pandas as pd
 
 
 class DBStore:
-    def __init__(self):
-        self.engine = create_engine(os.getenv('DB_URI'))
+    def __init__(self, db_uri: str):
+        self.engine = create_engine(db_uri)
 
-    def read_rows(self, n_rows: int, offset: int):
-        ids = list(range(offset, offset + n_rows))
+    def read_rows(self, start: int, seq_len: int) -> pd.DataFrame:
         query = f"""
         select
             id, "imageUrl"
         from ml_token_img
-        where id IN ({",".join(ids)})
+        where id between {start} and {start + seq_len}
         """
         return pd.read_sql_query(query, self.engine)
 
-    def write_to_df(self):
-        pass
+    def get_last_bd_id(self):
+        query = f"""
+        select id
+        from ml_token_img
+        order by id desc
+        limit 1
+        """
+        return int(pd.read_sql_query(query, self.engine).id.iloc[0])
+
+    def write_to_df(self, df: pd.DataFrame):
+        df.to_sql("checknft.tmp_ml_token_img", self.engine, index=False, if_exists="append")

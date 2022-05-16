@@ -1,4 +1,4 @@
-from lib.data_processing import CloudImgDatasetLoader
+from lib.data_loaders import CloudImgDatasetLoader
 import pandas as pd
 import json
 import os
@@ -18,5 +18,5 @@ if __name__ == "__main__":
     # del df['local_path']
     if 'url' not in df.columns:
         df['url'] = df['imageUrl']
-    loader = CloudImgDatasetLoader(df, **conf)
+    loader = CloudImgDatasetLoader(df=df, **conf)
     loader()

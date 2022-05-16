@@ -1,1 +1,1 @@
-from .containers import DBConnector
+from .containers import SqlConnector

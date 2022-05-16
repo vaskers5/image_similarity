@@ -6,11 +6,13 @@ import psycopg2
 
 sql = """
 with token_data as (select t.id, "name", "description"
-    from token as t 
+    from token as t
+    order by id
     limit 1000),
     t_d as (select id, "imageUrl", "collectionId"
     from ml_token_img
     where "imageUrl" != ''
+    order by id
     limit 1000)
 
 select td.id, "name", "description", "imageUrl", "collectionId"

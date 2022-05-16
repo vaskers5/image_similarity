@@ -3,7 +3,7 @@ from typing import Dict
 import argparse
 import os
 
-from lib.data_processing import CloudImgDatasetLoader
+from lib.data_loaders import CloudImgDatasetLoader
 
 
 def load_args() -> Dict[str, str]:
