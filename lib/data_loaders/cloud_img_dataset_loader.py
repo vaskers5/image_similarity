@@ -10,10 +10,11 @@ from aiohttp_retry import RetryClient, FibonacciRetry
 from sklearn.model_selection import train_test_split
 from copy import deepcopy
 from pandarallel import pandarallel
-from typing import Optional
-
+from typing import Optional, Iterable
+import re
 
 from lib.data_loaders.abstract_loader import AbstractLoader
+from lib.batch_info import CheckpointInfo
 
 HOST_IPFS_URL = "http://212.98.190.240:8080/ipfs"
 
@@ -33,6 +34,10 @@ def gen_proxy(proxy_id: int) -> str:
                         int(os.getenv("PROXY_PORT"))))
     return super_proxy_url
 
+
+RETRY_STATUSES = {x for x in range(100, 600)}
+RETRY_STATUSES.remove(200)
+RETRY_STATUSES.remove(429)
 
 ALL_PROXY = [gen_proxy(i) for i in range(120)]
 ALL_PROXY.append('self_url')
@@ -57,23 +62,23 @@ class CloudImgDatasetLoader(AbstractLoader):
             batch_df = self._dataframe_preprocessing(batch_df)
             logger.info(f'Checkpoint {idx} on downloading')
             loop = asyncio.get_event_loop()
-            final_paths, statuses = loop.run_until_complete(self._load_batch(batch_df))
-            self.save_checkpoint(batch_df, final_paths, statuses)
+            info = loop.run_until_complete(self._load_batch(batch_df))
+            self.save_checkpoint(info)
             logger.info(f'Checkpoint {idx} was successfully downloaded')
 
-    async def _load_batch(self, batch_df: pd.DataFrame) -> None:
-        final_paths, final_status_codes = [], []
+    async def _load_batch(self, batch_df: pd.DataFrame) -> CheckpointInfo:
+        info = CheckpointInfo()
         for stratified_batch in self._get_stratified_batches(batch_df, self.batch_size):
             urls, ids = stratified_batch['imageUrl'].to_list(), stratified_batch['id'].to_list()
             src_paths = self._gen_all_paths(ids)
-            final_paths += [*src_paths]
-            statuses = await asyncio.wait(map(self._file_download_task, urls, src_paths))
-            statuses = [status.result() for status in statuses[0]]
-            final_status_codes += [*statuses]
-        return final_paths, final_status_codes
+            results = await asyncio.wait(map(self._file_download_task, ids, urls, src_paths),
+                                         return_when=asyncio.ALL_COMPLETED)
+            batch_info = [result.result() for result in results[0]]
+            info.add_info(batch_info)
+        return info
 
     @staticmethod
-    def _get_stratified_batches(df: pd.DataFrame, batch_size: int):
+    def _get_stratified_batches(df: pd.DataFrame, batch_size: int) -> Iterable:
         def get_batch(state_df: pd.DataFrame, micro_batch_size: int) -> pd.DataFrame:
             x_train, x_test, y_train, y_test = train_test_split(state_df,
                                                                 state_df['domen'].to_list(),
@@ -83,7 +88,7 @@ class CloudImgDatasetLoader(AbstractLoader):
 
         batched_df = deepcopy(df)
         batches = []
-        iter_num = int(len(batched_df) / batch_size) + 1
+        iter_num = int(len(batched_df) / batch_size)
         for i in range(iter_num):
             if len(batched_df) > batch_size:
                 batch = get_batch(batched_df, batch_size)
@@ -92,17 +97,21 @@ class CloudImgDatasetLoader(AbstractLoader):
             batches += [batch]
             batched_df = batched_df[-batched_df['id'].isin(batch['id'].to_list())]
             yield batch
+        if len(batched_df) > 0:
+            yield batched_df
 
-    @staticmethod
-    async def _load_sample(url: str) -> Optional[bytes]:
+    async def _load_sample(self, url: str) -> Optional[bytes]:
         content = None
+        if len(url) > 255:
+            return content, 400
         headers = None
         proxy_url = random.choice(ALL_PROXY)
         old_url = deepcopy(url)
         if proxy_url == 'self_url':
             proxy_url = None
         if 'ipfs' in url:
-            url = f"{HOST_IPFS_URL}/{url[url.find('ipfs/'):].replace('ipfs/', '')}"
+            ipfs_id = self.parse_ipfs_url(url)
+            url = f"{HOST_IPFS_URL}/{ipfs_id}"
             proxy_url = None
         if 'pinata.cloud' in url:
             headers = {
@@ -112,14 +121,30 @@ class CloudImgDatasetLoader(AbstractLoader):
             url = url.replace('pinata.cloud', 'pixelplex.mypinata.cloud')
             proxy_url = None
         try:
-            async with RetryClient(retry_options=FibonacciRetry(attempts=1, max_timeout=1)) as session:
+            options = FibonacciRetry(attempts=3, max_timeout=30)
+            async with RetryClient(retry_options=options) as session:
                 async with session.get(url, proxy=proxy_url, ssl=False, headers=headers) as response:
                     content = await response.read()
+                    status = response.status
         except Exception as e:
             logger.debug(e)
             logger.debug(url)
             logger.debug(old_url)
-            return content, e.status_code
-        finally:
-            return content, 200
+            return content, 400
+        return content, status
 
+    @staticmethod
+    def parse_ipfs_url(url: str) -> str:
+
+        def _parse_ipfs_url(mime_url: str) -> str:
+            ipfs_reg = r'(ipfs://)|(ipfs/)|(ipfs.io/)|(ipfs.io/ipfs/)'
+            parsed_url = re.search(ipfs_reg, mime_url)
+            if not parsed_url:
+                return mime_url
+            return mime_url[parsed_url.span()[-1]:]
+
+        for i in range(3):
+            if 'ipfs' in url:
+                url = _parse_ipfs_url(url)
+            else:
+                return url

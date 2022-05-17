@@ -4,7 +4,7 @@ import pandas as pd
 from loguru import logger
 import aiofiles
 import shutil
-from typing import Tuple, Optional, List
+from typing import Tuple, Optional, List, Dict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import base64
@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 
 from containers import SqlConnector
 from lib.data_loaders.df_loader import Idf_loader
+from lib.batch_info import CheckpointInfo
 
 
 class AbstractLoader(ABC):
@@ -61,50 +62,57 @@ class AbstractLoader(ABC):
         self._load_full_data()
 
     def save_checkpoint(self,
-                        batch_df: pd.DataFrame,
-                        src_paths: List[Path],
-                        status_codes: List[int]):
+                        info: CheckpointInfo) -> None:
 
+        info_records = info.to_records()
         with ThreadPoolExecutor() as executor:
-            src_paths = list(executor.map(self._clear_checkpoint, src_paths))
+            cleared_src_paths = list(executor.map(self._clear_checkpoint, info_records['path']))
 
         main_folder = "/".join(str(self.folder).split('/')[:-2])
 
         def cut_path(path: Path) -> str:
             return str(path).replace(main_folder, '')
 
-        place_holder = [None for i in range(len(batch_df))]
+        place_holder = [None for i in range(len(info_records['url']))]
         meta_data = []
 
-        urls = batch_df['imageUrl'].to_list()
-        for idx, url in enumerate(batch_df['imageUrl'].to_list()):
+        for idx, url in enumerate(info_records['url']):
 
             if len(url) >= 254:
-                urls[idx] = None
+                info_records['url'][idx] = ''
                 meta_data += [url]
             else:
                 meta_data += [None]
-
+        last_id = self.db_store.get_last_bd_id('tmp_ml_token_img') + 1
+        ids = list(range(last_id, last_id + len(info_records['url'])))
         save_df = pd.DataFrame({
-            'filePath': list(map(cut_path, src_paths)),
+            'id': ids,
+            'filePath': list(map(cut_path, cleared_src_paths)),
             'fileData': meta_data,
             'fileType': place_holder,
-            'fileRemoteUrl': urls,
-            'tokenId': batch_df['id'].astype(int).to_list(),
-            'statusCode': status_codes
+            'fileRemoteUrl': info_records['url'],
+            'tokenId': info_records['id'],
+            'statusCode': info_records['status'],
+            'fileMeta': place_holder
         })
         self.db_store.write_to_df(save_df)
 
     async def _load_batch(self, idx: int, batch_df: pd.DataFrame, need_saving=True) -> None:
         raise NotImplementedError
 
-    async def _file_download_task(self, url: str, src_path: Path) -> None:
+    async def _file_download_task(self,
+                                  sample_id: str,
+                                  url: str,
+                                  src_path: Path) -> Dict[str, str]:
+        task_info = {'url': url, 'path': src_path, 'id': sample_id}
         if not os.path.exists(src_path):
             content, load_status = await self._load_sample(url)
             save_status = await self._save_img(content, local_source_path=src_path)
-            return save_status if save_status else load_status
+
+            task_info['status'] = save_status if save_status else load_status
         else:
-            return 200
+            task_info['status'] = 200
+        return task_info
 
     async def _save_img(self, content: bytes, local_source_path: Path) -> None:
         if content:
@@ -114,7 +122,7 @@ class AbstractLoader(ABC):
             except Exception as e:
                 return 665
 
-    def _generate_img_path(self, img_id: str) -> Tuple[Path, Path]:
+    def _generate_img_path(self, img_id: str) -> Path:
         hasher = hashlib.sha1(str(img_id).encode('utf-8'))
         image_name = base64.urlsafe_b64encode(hasher.digest()).decode('utf-8')
         image_name = str(image_name).replace('=', '').lower()
