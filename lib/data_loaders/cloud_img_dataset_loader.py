@@ -98,14 +98,14 @@ class CloudImgDatasetLoader(AbstractLoader):
             url = url.replace('pinata.cloud', 'pixelplex.mypinata.cloud')
             proxy_url = None
         try:
-            options = FibonacciRetry(attempts=1, max_timeout=3)
+            options = FibonacciRetry(attempts=3, max_timeout=30)
             async with RetryClient(retry_options=options) as session:
                 async with session.get(url, proxy=proxy_url, ssl=False, headers=headers) as response:
                     content = await response.read()
                     status = response.status
         except Exception as e:
-            logger.warning(e)
-            logger.warning(old_url)
+            # logger.warning(e)
+            # logger.warning(old_url)
             return content, 400
         return content, status
 
