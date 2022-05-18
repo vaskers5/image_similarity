@@ -25,31 +25,6 @@ np.random.seed(42)
 logger.add('logs/logs.log', level='DEBUG')
 
 
-os.environ['PINATA_API_KEY'] = '007a645db305c7e42d79'
-os.environ['PINATA_SECRET'] = 'WC9Hsv2qZVkbCBW9Q62N5aHnpR9y2el0'
-os.environ['PROXY_PASSWORD'] = 'to08bx2tnx2u'
-os.environ['PROXY_PORT'] = '22225'
-os.environ['PROXY_USER'] = 'lum-customer-hl_1aa52067-zone-checknft_unlimited'
-os.environ['DB_URI'] = 'postgresql+psycopg2://mlremoteuser:LJyRmZEfBae@94.130.201.172:5432/checknft'
-
-
-def gen_proxy(proxy_id: int) -> str:
-    super_proxy_url = ('http://%s-session-%s:%s@zproxy.lum-superproxy.io:%d' %
-                       (os.getenv('PROXY_USER'),
-                        proxy_id,
-                        os.getenv('PROXY_PASSWORD'),
-                        int(os.getenv("PROXY_PORT"))))
-    return super_proxy_url
-
-
-RETRY_STATUSES = {x for x in range(100, 600)}
-RETRY_STATUSES.remove(200)
-RETRY_STATUSES.remove(429)
-
-ALL_PROXY = [gen_proxy(i) for i in range(120)]
-ALL_PROXY.append('self_url')
-
-
 class CloudImgDatasetLoader(AbstractLoader):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -107,7 +82,7 @@ class CloudImgDatasetLoader(AbstractLoader):
         if len(url) > 255:
             return content, 400
         headers = None
-        proxy_url = random.choice(ALL_PROXY)
+        proxy_url = self.proxy.refresh_url()
         old_url = deepcopy(url)
         if proxy_url == 'self_url':
             proxy_url = None

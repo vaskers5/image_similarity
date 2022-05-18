@@ -5,7 +5,7 @@ from loguru import logger
 import aiofiles
 import shutil
 from typing import Tuple, Optional, List, Dict
-from concurrent.futures import ThreadPoolExecutor
+from lib.proxy import Luminati
 from pathlib import Path
 import base64
 import hashlib
@@ -48,6 +48,8 @@ class AbstractLoader(ABC):
         self.out_dataset_path = out_dataset_path
         self.folder = os.path.abspath(out_dataset_path)
         self.src_img_folder = os.path.join(self.folder, 'img_data_src')
+        self.proxy = Luminati(username=os.getenv('PROXY_USER'),
+                              password=os.getenv('PROXY_PASSWORD'))
 
     def __call__(self) -> None:
         r""" Function for start downloading.
