@@ -65,8 +65,7 @@ class AbstractLoader(ABC):
                         info: CheckpointInfo) -> None:
 
         info_records = info.to_records()
-        with ThreadPoolExecutor() as executor:
-            cleared_src_paths = list(executor.map(self._clear_checkpoint, info_records['path']))
+        cleared_src_paths = list(map(self._clear_checkpoint, info_records['path']))
 
         main_folder = "/".join(str(self.folder).split('/')[:-2])
 

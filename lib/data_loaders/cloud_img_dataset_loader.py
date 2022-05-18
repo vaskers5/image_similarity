@@ -5,7 +5,6 @@ import numpy as np
 import asyncio
 import random
 from loguru import logger
-import concurrent.futures
 from aiohttp_retry import RetryClient, FibonacciRetry
 from sklearn.model_selection import train_test_split
 from copy import deepcopy
@@ -24,6 +23,14 @@ tqdm.pandas()
 np.random.seed(42)
 
 logger.add('logs/logs.log', level='DEBUG')
+
+
+os.environ['PINATA_API_KEY'] = '007a645db305c7e42d79'
+os.environ['PINATA_SECRET'] = 'WC9Hsv2qZVkbCBW9Q62N5aHnpR9y2el0'
+os.environ['PROXY_PASSWORD'] = 'to08bx2tnx2u'
+os.environ['PROXY_PORT'] = '22225'
+os.environ['PROXY_USER'] = 'lum-customer-hl_1aa52067-zone-checknft_unlimited'
+os.environ['DB_URI'] = 'postgresql+psycopg2://mlremoteuser:LJyRmZEfBae@94.130.201.172:5432/checknft'
 
 
 def gen_proxy(proxy_id: int) -> str:
@@ -47,34 +54,29 @@ class CloudImgDatasetLoader(AbstractLoader):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-    def _load_ipfs_batch(self, batch_df: pd.DataFrame):
-        urls, ids = batch_df['imageUrl'].to_list(), batch_df['id'].to_list()
-        image_paths, src_paths = self._gen_all_paths(ids)
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            tqdm(executor.map(self.load_ipfs_file, urls, src_paths),
-                 leave=False,
-                 total=len(image_paths))
-        return image_paths, src_paths
-
     def _load_full_data(self) -> None:
         logger.info('Start downloading loop')
         for idx, batch_df in enumerate(self.df_iterator):
             batch_df = self._dataframe_preprocessing(batch_df)
             logger.info(f'Checkpoint {idx} on downloading')
             loop = asyncio.get_event_loop()
-            info = loop.run_until_complete(self._load_batch(batch_df))
-            self.save_checkpoint(info)
+            loop.run_until_complete(self._load_batch(batch_df))
             logger.info(f'Checkpoint {idx} was successfully downloaded')
 
     async def _load_batch(self, batch_df: pd.DataFrame) -> CheckpointInfo:
-        info = CheckpointInfo()
-        for stratified_batch in self._get_stratified_batches(batch_df, self.batch_size):
+        for idx, stratified_batch in enumerate(self._get_stratified_batches(batch_df,
+                                                                            self.batch_size)):
+            info = CheckpointInfo()
+            logger.info(f'Start downloading batch {idx}')
             urls, ids = stratified_batch['imageUrl'].to_list(), stratified_batch['id'].to_list()
             src_paths = self._gen_all_paths(ids)
             results = await asyncio.wait(map(self._file_download_task, ids, urls, src_paths),
                                          return_when=asyncio.ALL_COMPLETED)
             batch_info = [result.result() for result in results[0]]
             info.add_info(batch_info)
+            logger.info(f'Start writing {len(batch_info)} rows data to DB')
+            self.save_checkpoint(info)
+            logger.info(f'Checkpoint {idx} was downloaded!')
         return info
 
     @staticmethod
@@ -121,15 +123,14 @@ class CloudImgDatasetLoader(AbstractLoader):
             url = url.replace('pinata.cloud', 'pixelplex.mypinata.cloud')
             proxy_url = None
         try:
-            options = FibonacciRetry(attempts=3, max_timeout=30)
+            options = FibonacciRetry(attempts=1, max_timeout=3)
             async with RetryClient(retry_options=options) as session:
                 async with session.get(url, proxy=proxy_url, ssl=False, headers=headers) as response:
                     content = await response.read()
                     status = response.status
         except Exception as e:
-            logger.debug(e)
-            logger.debug(url)
-            logger.debug(old_url)
+            logger.warning(e)
+            logger.warning(old_url)
             return content, 400
         return content, status
 
